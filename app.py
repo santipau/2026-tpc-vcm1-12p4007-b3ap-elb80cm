@@ -14,12 +14,10 @@ st.title("Remaining Useful Life (RUL) Forecasting")
 # ==========================================================
 # DATA SELECTION
 # ==========================================================
-st.sidebar.header("Model Selection")
+st.sidebar.header("Forecast Setup")
 
-forecast_model = st.sidebar.selectbox(
-    "Forecast Model",
-    ["Linear", "Non-linear"],
-    help="Non-linear uses the recent corrosion-rate trend to create a curved thickness forecast.",
+st.sidebar.caption(
+    "Forecast: non-linear worst case, linear base case, and linear best case."
 )
 
 DATA_DIR = Path("data")
@@ -191,7 +189,7 @@ def build_linear_forecast(future_days):
     return thk_mean, thk_worst, thk_best
 
 
-def build_nonlinear_forecast(future_days):
+def build_nonlinear_worst_case(future_days):
     model_df = df[["timestamp", "PREDICTED_CR_MA"]].dropna().tail(window)
     model_df = model_df[model_df["timestamp"].notna()]
 
@@ -210,15 +208,11 @@ def build_nonlinear_forecast(future_days):
     cr_mean_curve = np.maximum(intercept + slope * future_days, 0)
 
     # Keep the same 95% confidence logic as the linear model:
-    # mean corrosion-rate curve +/- 1.96 standard deviations.
+    # worst case is the non-linear mean corrosion-rate curve + 1.96 standard deviations.
     cr_upper_curve = np.maximum(cr_mean_curve + 1.96 * std_cr, 0)
-    cr_lower_curve = np.maximum(cr_mean_curve - 1.96 * std_cr, 0)
-
-    thk_mean = last_thickness - cumulative_loss_from_cr(cr_mean_curve, future_days)
     thk_worst = last_thickness - cumulative_loss_from_cr(cr_upper_curve, future_days)
-    thk_best = last_thickness - cumulative_loss_from_cr(cr_lower_curve, future_days)
 
-    return thk_mean, thk_worst, thk_best
+    return thk_worst
 
 
 def fmt(days):
@@ -265,20 +259,18 @@ if st.button("Forecasting"):
     # ------------------------------------------------------
     # Forecast thickness
     # ------------------------------------------------------
-    if forecast_model == "Non-linear":
-        forecast_result = build_nonlinear_forecast(future_days)
+    thk_mean, linear_worst, thk_best = build_linear_forecast(future_days)
+    nonlinear_worst = build_nonlinear_worst_case(future_days)
 
-        if forecast_result is None:
-            st.warning("Not enough recent data for non-linear forecast. Showing linear forecast instead.")
-            forecast_result = build_linear_forecast(future_days)
-            active_model = "Linear"
-        else:
-            active_model = "Non-linear"
-    else:
-        forecast_result = build_linear_forecast(future_days)
+    if nonlinear_worst is None:
+        st.warning(
+            "Not enough recent data for non-linear worst case. Showing linear worst case instead."
+        )
+        thk_worst = linear_worst
         active_model = "Linear"
-
-    thk_mean, thk_worst, thk_best = forecast_result
+    else:
+        thk_worst = nonlinear_worst
+        active_model = "Combined"
 
     upper = np.maximum(thk_best, thk_worst)
     lower = np.minimum(thk_best, thk_worst)
@@ -309,7 +301,7 @@ if st.button("Forecasting"):
             x=future_dates,
             y=thk_mean,
             mode="lines",
-            name=f"{active_model} Mean Forecast",
+            name="Linear Base Forecast",
             line=dict(dash="dash", width=2),
         )
     )
@@ -412,7 +404,9 @@ if st.button("Forecasting"):
     # ------------------------------------------------------
     # Show Plot
     # ------------------------------------------------------
-    st.subheader(f"{active_model} Forecast Thickness with 95% Confidence Interval")
+    st.subheader(
+        f"{active_model} Forecast Thickness with 95% Confidence Interval"
+    )
     st.plotly_chart(fig, use_container_width=True)
 
     # ------------------------------------------------------
